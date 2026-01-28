@@ -49,18 +49,7 @@ ASSETS = [
 ]
 
 # --- Global State Storage ---
-# We store structured data here for JSON API access
 GLOBAL_STATE = {}
-# Structure:
-# GLOBAL_STATE[symbol] = {
-#    "params": {...},
-#    "equity_curve": [...], 
-#    "test_trades": [...],
-#    "live_logs": [...],
-#    "live_trades": [...],
-#    "status": "Initializing" | "Running"
-# }
-
 STATE_LOCK = threading.Lock()
 
 # --- JSON Encoder for NumPy ---
@@ -128,7 +117,6 @@ def run_backtest(df, stop_pct, profit_pct, lines, detailed_log_trades=0):
         prev_c = closes[i-1]
         ts = str(times[i])
 
-        # Logic matches original script exactly
         if position != 0:
             sl_hit = False
             tp_hit = False
@@ -267,8 +255,9 @@ def live_trading_daemon(symbol, pair, best_ind, initial_equity, start_price):
         }
         
         with STATE_LOCK:
-            GLOBAL_STATE[symbol]['live_logs'].insert(0, log_entry)
-            GLOBAL_STATE[symbol]['live_logs'] = GLOBAL_STATE[symbol]['live_logs'][:50] # Keep last 50
+            if symbol in GLOBAL_STATE:
+                GLOBAL_STATE[symbol]['live_logs'].insert(0, log_entry)
+                GLOBAL_STATE[symbol]['live_logs'] = GLOBAL_STATE[symbol]['live_logs'][:50] # Keep last 50
         
         # Trading Logic
         if live_position != 0:
@@ -292,7 +281,8 @@ def live_trading_daemon(symbol, pair, best_ind, initial_equity, start_price):
                 }
                 
                 with STATE_LOCK:
-                    GLOBAL_STATE[symbol]['live_trades'].insert(0, trade)
+                     if symbol in GLOBAL_STATE:
+                        GLOBAL_STATE[symbol]['live_trades'].insert(0, trade)
                 
                 live_position = 0
                 prev_close = current_c
@@ -318,7 +308,8 @@ def live_trading_daemon(symbol, pair, best_ind, initial_equity, start_price):
                         'price': live_entry_price, 'pnl': 0, 'equity': live_equity, 'reason': 'Entry'
                     }
                     with STATE_LOCK:
-                         GLOBAL_STATE[symbol]['live_trades'].insert(0, trade)
+                         if symbol in GLOBAL_STATE:
+                            GLOBAL_STATE[symbol]['live_trades'].insert(0, trade)
 
         prev_close = current_c
 
@@ -368,8 +359,17 @@ def process_asset(asset_config):
 
     pop = toolbox.population(n=POPULATION_SIZE)
     hof = tools.HallOfFame(1)
-    algorithms.eaSimple(pop, toolbox, cxpb=0.5, mutpb=0.2, ngen=GENERATIONS, verbose=False)
     
+    # FIXED: Added halloffame=hof argument
+    algorithms.eaSimple(pop, toolbox, cxpb=0.5, mutpb=0.2, ngen=GENERATIONS, halloffame=hof, verbose=False)
+    
+    # Safety check if GA failed completely
+    if len(hof) == 0:
+        print(f"[{sym}] GA Error: No individuals in Hall of Fame.")
+        with STATE_LOCK:
+            GLOBAL_STATE[sym]["status"] = "Error"
+        return
+
     best_ind = hof[0]
     
     # Backtest for curves
